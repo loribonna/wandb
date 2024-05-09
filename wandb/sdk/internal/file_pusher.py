@@ -80,11 +80,15 @@ class FilePusher:
         step = 0
         spinner_states = ["-", "\\", "|", "/"]
         stop = False
+        initial_time = time.time()
+        pid = os.getpid()
         while True:
+            if time.time() - initial_time > 10:
+                stop = True # GARBAGE CODE FOR A GARBAGE PROBLEM
             if not self.is_alive():
                 stop = True
             summary = self._stats.summary()
-            line = " {:.2f}MB of {:.2f}MB uploaded ({:.2f}MB deduped)\r".format(
+            line = " {:.2f}MB of {:.2f}MB uploaded ({:.2f}MB deduped) [PID: {pid}]\r".format(
                 summary.uploaded_bytes / 1048576.0,
                 summary.total_bytes / 1048576.0,
                 summary.deduped_bytes / 1048576.0,

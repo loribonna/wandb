@@ -3328,11 +3328,11 @@ class Run:
 
         megabyte = wandb.util.POW_2_BYTES[2][1]
         line = (
-            f"{progress.uploaded_bytes / megabyte :.3f} MB of {progress.total_bytes / megabyte:.3f} MB uploaded "
+            f"{progress.uploaded_bytes / megabyte :.3f} MB of {progress.total_bytes / megabyte:.3f} MB uploaded [PID: {os.getpid()}]" # STFU WANDB 
             f"({progress.deduped_bytes / megabyte:.3f} MB deduped)\r"
         )
 
-        percent_done = (
+        q = (
             1.0
             if progress.total_bytes == 0
             else progress.uploaded_bytes / progress.total_bytes
