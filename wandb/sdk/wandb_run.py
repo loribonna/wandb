@@ -3849,7 +3849,7 @@ class Run:
         else:
             line += "\r"
 
-        q = (
+        percent_done = (
             1.0
             if progress.total_bytes == 0
             else progress.uploaded_bytes / progress.total_bytes
