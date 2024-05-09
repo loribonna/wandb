@@ -11,9 +11,14 @@ tag:
   shards:
     - default
     - standalone-cpu
+  platforms:
+    - linux
+    - mac
 var:
   - num_sentry_sessions:
       :fn:len: :wandb:sentry_sessions
+env:
+  - WANDB_ERROR_REPORTING: "true"
 assert:
   - :wandb:runs_len: 1
   - :wandb:runs[0][config]: {}

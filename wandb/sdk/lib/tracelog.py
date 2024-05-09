@@ -6,7 +6,7 @@ Functions:
     log_message_send    - message sent to socket
     log_message_recv    - message received from socket
     log_message_process - message processed by thread
-    log_message_link    - message linked to another mesage
+    log_message_link    - message linked to another message
     log_message_assert  - message encountered problem
 
 """
@@ -103,8 +103,8 @@ def _result_msg_type(result: "pb.Result") -> str:
 def _log_message(
     msg: "MessageType", log_type: str, resource: Optional[str] = None
 ) -> None:
-    record: Optional["pb.Record"] = None
-    result: Optional["pb.Result"] = None
+    record: Optional[pb.Record] = None
+    result: Optional[pb.Result] = None
     is_response = False
     msg_type: str
     # Note: using strings to avoid an import

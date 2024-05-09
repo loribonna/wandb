@@ -8,29 +8,29 @@ import shutil
 import threading
 from typing import TYPE_CHECKING, NamedTuple, Optional, Union, cast
 
-from wandb.filesync import dir_watcher, step_upload
+from wandb.filesync import step_upload
 from wandb.sdk.lib import filesystem, runid
+from wandb.sdk.lib.paths import LogicalPath
 
 if TYPE_CHECKING:
     import tempfile
 
     from wandb.filesync import stats
-    from wandb.sdk.interface import artifacts
-    from wandb.sdk.internal import artifacts as internal_artifacts
+    from wandb.sdk.artifacts.artifact_manifest import ArtifactManifest
+    from wandb.sdk.artifacts.artifact_saver import SaveFn
     from wandb.sdk.internal import internal_api
 
 
 class RequestUpload(NamedTuple):
     path: str
-    save_name: dir_watcher.SaveName
+    save_name: LogicalPath
     copy: bool
 
 
 class RequestStoreManifestFiles(NamedTuple):
-    manifest: "artifacts.ArtifactManifest"
+    manifest: "ArtifactManifest"
     artifact_id: str
-    save_fn: "internal_artifacts.SaveFn"
-    save_fn_async: "internal_artifacts.SaveFnAsync"
+    save_fn: "SaveFn"
 
 
 class RequestCommitArtifact(NamedTuple):
@@ -95,13 +95,11 @@ class StepChecksum:
                         req.copy,
                         None,
                         None,
-                        None,
                     )
                 )
             elif isinstance(req, RequestStoreManifestFiles):
                 for entry in req.manifest.entries.values():
                     if entry.local_path:
-
                         self._stats.init_file(
                             entry.local_path,
                             cast(int, entry.size),
@@ -110,14 +108,11 @@ class StepChecksum:
                         self._output_queue.put(
                             step_upload.RequestUpload(
                                 entry.local_path,
-                                dir_watcher.SaveName(
-                                    entry.path
-                                ),  # typecast might not be legit
+                                entry.path,
                                 req.artifact_id,
                                 entry.digest,
                                 False,
                                 functools.partial(req.save_fn, entry),
-                                functools.partial(req.save_fn_async, entry),
                                 entry.digest,
                             )
                         )

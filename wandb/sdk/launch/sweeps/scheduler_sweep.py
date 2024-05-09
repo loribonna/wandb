@@ -1,4 +1,5 @@
 """Scheduler for classic wandb Sweeps."""
+
 import logging
 from pprint import pformat as pf
 from typing import Any, Dict, List, Optional
@@ -50,6 +51,7 @@ class SweepScheduler(Scheduler):
 
             return SweepRun(
                 id=_run_id,
+                state=RunState.PENDING,
                 args=command.get("args", {}),
                 logs=command.get("logs", []),
                 worker_id=worker_id,
@@ -57,12 +59,12 @@ class SweepScheduler(Scheduler):
         return None
 
     def _get_sweep_commands(self, worker_id: int) -> List[Dict[str, Any]]:
-        """Helper to recieve sweep command from backend."""
+        """Helper to receive sweep command from backend."""
         # AgentHeartbeat wants a Dict of runs which are running or queued
         _run_states: Dict[str, bool] = {}
         for run_id, run in self._yield_runs():
             # Filter out runs that are from a different worker thread
-            if run.worker_id == worker_id and run.state == RunState.ALIVE:
+            if run.worker_id == worker_id and run.state.is_alive:
                 _run_states[run_id] = True
 
         _logger.debug(f"Sending states: \n{pf(_run_states)}\n")

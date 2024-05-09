@@ -1,5 +1,6 @@
-import base64
+import functools
 import itertools
+import json
 import logging
 import os
 import queue
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
 import requests
 
 import wandb
-from wandb import env, util
+from wandb import util
 from wandb.sdk.internal import internal_api
 
 from ..lib import file_stream_utils
@@ -51,12 +52,13 @@ logger = logging.getLogger(__name__)
 
 class Chunk(NamedTuple):
     filename: str
-    data: Any
+    data: str
 
 
 class DefaultFilePolicy:
     def __init__(self, start_chunk_id: int = 0) -> None:
         self._chunk_id = start_chunk_id
+        self.has_debug_log = False
 
     def process_chunks(
         self, chunks: List[Chunk]
@@ -64,6 +66,21 @@ class DefaultFilePolicy:
         chunk_id = self._chunk_id
         self._chunk_id += len(chunks)
         return {"offset": chunk_id, "content": [c.data for c in chunks]}
+
+    # TODO: this is very inefficient, this is meant for temporary debugging and will be removed in future releases
+    def _debug_log(self, data: Any):
+        if self.has_debug_log or not os.environ.get("WANDB_DEBUG_FILESTREAM_LOG"):
+            return
+
+        loaded = json.loads(data)
+        if not isinstance(loaded, dict):
+            return
+
+        # get key size and convert to MB
+        key_sizes = [(k, len(json.dumps(v))) for k, v in loaded.items()]
+        key_msg = [f"{k}: {v/1048576:.5f} MB" for k, v in key_sizes]
+        wandb.termerror(f"Step: {loaded['_step']} | {key_msg}", repeat=False)
+        self.has_debug_log = True
 
 
 class JsonlFilePolicy(DefaultFilePolicy):
@@ -80,6 +97,7 @@ class JsonlFilePolicy(DefaultFilePolicy):
                 )
                 wandb.termerror(msg, repeat=False)
                 wandb._sentry.message(msg, repeat=False)
+                self._debug_log(chunk.data)
             else:
                 chunk_data.append(chunk.data)
 
@@ -98,6 +116,7 @@ class SummaryFilePolicy(DefaultFilePolicy):
             )
             wandb.termerror(msg, repeat=False)
             wandb._sentry.message(msg, repeat=False)
+            self._debug_log(data)
             return False
         return {"offset": 0, "content": [data]}
 
@@ -207,7 +226,7 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
         prefix += token + " "
         return prefix, rest
 
-    def process_chunks(self, chunks: List) -> List["ProcessedChunk"]:
+    def process_chunks(self, chunks: List[Chunk]) -> List["ProcessedChunk"]:
         r"""Process chunks.
 
         Args:
@@ -272,24 +291,12 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
         intervals = self.get_consecutive_offsets(console)
         ret = []
         for a, b in intervals:
-            processed_chunk: "ProcessedChunk" = {
-                "offset": a,
+            processed_chunk: ProcessedChunk = {
+                "offset": self._chunk_id + a,
                 "content": [console[i] for i in range(a, b + 1)],
             }
             ret.append(processed_chunk)
         return ret
-
-
-class BinaryFilePolicy(DefaultFilePolicy):
-    def __init__(self) -> None:
-        super().__init__()
-        self._offset: int = 0
-
-    def process_chunks(self, chunks: List[Chunk]) -> "ProcessedBinaryChunk":
-        data = b"".join([c.data for c in chunks])
-        enc = base64.b64encode(data).decode("ascii")
-        self._offset += len(data)
-        return {"offset": self._offset, "content": enc, "encoding": "base64"}
 
 
 class FileStreamApi:
@@ -311,7 +318,6 @@ class FileStreamApi:
         artifact_id: str
         save_name: str
 
-    HTTP_TIMEOUT = env.get_http_timeout(10)
     MAX_ITEMS_PER_PUSH = 10000
 
     def __init__(
@@ -319,6 +325,7 @@ class FileStreamApi:
         api: "internal_api.Api",
         run_id: str,
         start_time: float,
+        timeout: float = 0,
         settings: Optional[dict] = None,
     ) -> None:
         settings = settings or dict()
@@ -334,17 +341,14 @@ class FileStreamApi:
         self._run_id = run_id
         self._start_time = start_time
         self._client = requests.Session()
-        # todo: actually use the timeout once more thorough error injection in testing covers it
-        # self._client.post = functools.partial(self._client.post, timeout=self.HTTP_TIMEOUT)
-        self._client.auth = ("api", api.api_key or "")
-        self._client.headers.update(
-            {
-                "User-Agent": api.user_agent,
-                "X-WANDB-USERNAME": env.get_username() or "",
-                "X-WANDB-USER-EMAIL": env.get_user_email() or "",
-            }
-        )
-        self._file_policies: Dict[str, "DefaultFilePolicy"] = {}
+        timeout = timeout or 0
+        if timeout > 0:
+            self._client.post = functools.partial(self._client.post, timeout=timeout)  # type: ignore[method-assign]
+        self._client.auth = api.client.transport.session.auth
+        self._client.headers.update(api.client.transport.headers or {})
+        self._client.cookies.update(api.client.transport.cookies or {})  # type: ignore[no-untyped-call]
+        self._client.proxies.update(api.client.transport.session.proxies or {})
+        self._file_policies: Dict[str, DefaultFilePolicy] = {}
         self._dropped_chunks: int = 0
         self._queue: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._thread_except_body)
@@ -414,7 +418,7 @@ class FileStreamApi:
         posted_anything_time = time.time()
         ready_chunks = []
         uploaded: Set[str] = set()
-        finished: Optional["FileStreamApi.Finish"] = None
+        finished: Optional[FileStreamApi.Finish] = None
         while finished is None:
             items = self._read_queue()
             for item in items:
@@ -503,7 +507,7 @@ class FileStreamApi:
             wandb.termerror(
                 "Dropped streaming file chunk (see wandb/debug-internal.log)"
             )
-            logging.exception("dropped chunk %s" % response)
+            logger.exception("dropped chunk %s" % response)
             self._dropped_chunks += 1
         else:
             parsed: Optional[dict] = None
@@ -568,12 +572,12 @@ class FileStreamApi:
     def enqueue_preempting(self) -> None:
         self._queue.put(self.Preempting())
 
-    def push(self, filename: str, data: Any) -> None:
+    def push(self, filename: str, data: str) -> None:
         """Push a chunk of a file to the streaming endpoint.
 
         Arguments:
-            filename: Name of file that this is a chunk of.
-            data: File data.
+            filename: Name of file to append to.
+            data: Text to append to the file.
         """
         self._queue.put(Chunk(filename, data))
 
@@ -594,9 +598,11 @@ class FileStreamApi:
         Arguments:
             exitcode: The exitcode of the watched process.
         """
+        logger.info("file stream finish called")
         self._queue.put(self.Finish(exitcode))
         # TODO(jhr): join on a thread which exited with an exception is a noop, clean up this path
         self._thread.join()
+        logger.info("file stream finish is done")
         if self._exc_info:
             logger.error("FileStream exception", exc_info=self._exc_info)
             # re-raising the original exception, will get re-caught in internal.py for the sender thread
@@ -627,7 +633,7 @@ def request_with_retry(
     retry_count = 0
     while True:
         try:
-            response: "requests.Response" = func(*args, **kwargs)
+            response: requests.Response = func(*args, **kwargs)
             response.raise_for_status()
             return response
         except (
@@ -658,15 +664,13 @@ def request_with_retry(
                 e.response is not None and e.response.status_code == 429
             ):
                 err_str = (
-                    "Filestream rate limit exceeded, retrying in {} seconds".format(
-                        delay
-                    )
+                    "Filestream rate limit exceeded, "
+                    f"retrying in {delay:.1f} seconds. "
                 )
                 if retry_callback:
                     retry_callback(e.response.status_code, err_str)
                 logger.info(err_str)
             else:
-                pass
                 logger.warning(
                     "requests_with_retry encountered retryable exception: %s. func: %s, args: %s, kwargs: %s",
                     e,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""All of W&B's environment variables
+"""All of W&B's environment variables.
 
 Getters and putters for all of them should go here. That
 way it'll be easier to avoid typos with names and be
@@ -13,10 +13,10 @@ these values in many cases.
 import json
 import os
 import sys
-from distutils.util import strtobool
+from pathlib import Path
 from typing import List, MutableMapping, Optional, Union
 
-import appdirs
+import platformdirs  # type: ignore
 
 Env = Optional[MutableMapping]
 
@@ -50,6 +50,7 @@ RUN_GROUP = "WANDB_RUN_GROUP"
 RUN_DIR = "WANDB_RUN_DIR"
 SWEEP_ID = "WANDB_SWEEP_ID"
 HTTP_TIMEOUT = "WANDB_HTTP_TIMEOUT"
+FILE_PUSHER_TIMEOUT = "WANDB_FILE_PUSHER_TIMEOUT"
 API_KEY = "WANDB_API_KEY"
 JOB_TYPE = "WANDB_JOB_TYPE"
 DISABLE_CODE = "WANDB_DISABLE_CODE"
@@ -59,6 +60,8 @@ SAVE_CODE = "WANDB_SAVE_CODE"
 TAGS = "WANDB_TAGS"
 IGNORE = "WANDB_IGNORE_GLOBS"
 ERROR_REPORTING = "WANDB_ERROR_REPORTING"
+CORE_ERROR_REPORTING = "WANDB_CORE_ERROR_REPORTING"
+CORE_DEBUG = "WANDB_CORE_DEBUG"
 DOCKER = "WANDB_DOCKER"
 AGENT_REPORT_INTERVAL = "WANDB_AGENT_REPORT_INTERVAL"
 AGENT_KILL_DELAY = "WANDB_AGENT_KILL_DELAY"
@@ -71,6 +74,8 @@ ANONYMOUS = "WANDB_ANONYMOUS"
 JUPYTER = "WANDB_JUPYTER"
 CONFIG_DIR = "WANDB_CONFIG_DIR"
 DATA_DIR = "WANDB_DATA_DIR"
+ARTIFACT_DIR = "WANDB_ARTIFACT_DIR"
+ARTIFACT_FETCH_FILE_URL_BATCH_SIZE = "WANDB_ARTIFACT_FETCH_FILE_URL_BATCH_SIZE"
 CACHE_DIR = "WANDB_CACHE_DIR"
 DISABLE_SSL = "WANDB_INSECURE_DISABLE_SSL"
 SERVICE = "WANDB_SERVICE"
@@ -80,14 +85,20 @@ INIT_TIMEOUT = "WANDB_INIT_TIMEOUT"
 GIT_COMMIT = "WANDB_GIT_COMMIT"
 GIT_REMOTE_URL = "WANDB_GIT_REMOTE_URL"
 _EXECUTABLE = "WANDB_EXECUTABLE"
+LAUNCH_QUEUE_NAME = "WANDB_LAUNCH_QUEUE_NAME"
+LAUNCH_QUEUE_ENTITY = "WANDB_LAUNCH_QUEUE_ENTITY"
+LAUNCH_TRACE_ID = "WANDB_LAUNCH_TRACE_ID"
+_REQUIRE_CORE = "WANDB__REQUIRE_CORE"
 
 # For testing, to be removed in future version
 USE_V1_ARTIFACTS = "_WANDB_USE_V1_ARTIFACTS"
 
 
 def immutable_keys() -> List[str]:
-    """These are env keys that shouldn't change within a single process.  We use this to maintain
-    certain values between multiple calls to wandb.init within a single process."""
+    """These are env keys that shouldn't change within a single process.
+
+    We use this to maintain certain values between multiple calls to wandb.init within a single process.
+    """
     return [
         DIR,
         ENTITY,
@@ -116,6 +127,8 @@ def immutable_keys() -> List[str]:
         HTTP_TIMEOUT,
         HOST,
         DATA_DIR,
+        ARTIFACT_DIR,
+        ARTIFACT_FETCH_FILE_URL_BATCH_SIZE,
         CACHE_DIR,
         USE_V1_ARTIFACTS,
         DISABLE_SSL,
@@ -128,11 +141,16 @@ def _env_as_bool(
     if env is None:
         env = os.environ
     val = env.get(var, default)
+    if not isinstance(val, str):
+        return False
     try:
-        val = bool(strtobool(val))  # type: ignore
-    except (AttributeError, ValueError):
-        pass
-    return val if isinstance(val, bool) else False
+        return strtobool(val)
+    except ValueError:
+        return False
+
+
+def is_require_core(env: Optional[Env] = None) -> bool:
+    return _env_as_bool(_REQUIRE_CORE, default="False", env=env)
 
 
 def is_debug(default: Optional[str] = None, env: Optional[Env] = None) -> bool:
@@ -141,6 +159,14 @@ def is_debug(default: Optional[str] = None, env: Optional[Env] = None) -> bool:
 
 def error_reporting_enabled() -> bool:
     return _env_as_bool(ERROR_REPORTING, default="True")
+
+
+def core_error_reporting_enabled(default: Optional[str] = None) -> bool:
+    return _env_as_bool(CORE_ERROR_REPORTING, default=default)
+
+
+def core_debug(default: Optional[str] = None) -> bool:
+    return _env_as_bool(CORE_DEBUG, default=default)
 
 
 def ssl_disabled() -> bool:
@@ -187,11 +213,22 @@ def get_docker(
     return env.get(DOCKER, default)
 
 
-def get_http_timeout(default: int = 10, env: Optional[Env] = None) -> int:
+def get_http_timeout(default: int = 20, env: Optional[Env] = None) -> int:
     if env is None:
         env = os.environ
 
     return int(env.get(HTTP_TIMEOUT, default))
+
+
+def get_file_pusher_timeout(
+    default: Optional[int] = None,
+    env: Optional[Env] = None,
+) -> Optional[int]:
+    if env is None:
+        env = os.environ
+
+    timeout = env.get(FILE_PUSHER_TIMEOUT, default)
+    return int(timeout) if timeout else None
 
 
 def get_ignore(
@@ -348,19 +385,32 @@ def get_magic(
 
 
 def get_data_dir(env: Optional[Env] = None) -> str:
-    default_dir = appdirs.user_data_dir("wandb")
+    default_dir = platformdirs.user_data_dir("wandb")
     if env is None:
         env = os.environ
     val = env.get(DATA_DIR, default_dir)
     return val
 
 
-def get_cache_dir(env: Optional[Env] = None) -> str:
-    default_dir = appdirs.user_cache_dir("wandb")
+def get_artifact_dir(env: Optional[Env] = None) -> str:
+    default_dir = os.path.join(".", "artifacts")
     if env is None:
         env = os.environ
-    val = env.get(CACHE_DIR, default_dir)
+    val = env.get(ARTIFACT_DIR, default_dir)
+    return os.path.abspath(val)
+
+
+def get_artifact_fetch_file_url_batch_size(env: Optional[Env] = None) -> int:
+    default_batch_size = 5000
+    if env is None:
+        env = os.environ
+    val = int(env.get(ARTIFACT_FETCH_FILE_URL_BATCH_SIZE, default_batch_size))
     return val
+
+
+def get_cache_dir(env: Optional[Env] = None) -> Path:
+    env = env or os.environ
+    return Path(env.get(CACHE_DIR, platformdirs.user_cache_dir("wandb")))
 
 
 def get_use_v1_artifacts(env: Optional[Env] = None) -> bool:
@@ -408,3 +458,39 @@ def disable_git(env: Optional[Env] = None) -> bool:
     if isinstance(val, str):
         val = False if val.lower() == "false" else True
     return val
+
+
+def get_launch_queue_name(env: Optional[Env] = None) -> Optional[str]:
+    if env is None:
+        env = os.environ
+    val = env.get(LAUNCH_QUEUE_NAME, None)
+    return val
+
+
+def get_launch_queue_entity(env: Optional[Env] = None) -> Optional[str]:
+    if env is None:
+        env = os.environ
+    val = env.get(LAUNCH_QUEUE_ENTITY, None)
+    return val
+
+
+def get_launch_trace_id(env: Optional[Env] = None) -> Optional[str]:
+    if env is None:
+        env = os.environ
+    val = env.get(LAUNCH_TRACE_ID, None)
+    return val
+
+
+def strtobool(val: str) -> bool:
+    """Convert a string representation of truth to true or false.
+
+    Copied from distutils. distutils was removed in Python 3.12.
+    """
+    val = val.lower()
+
+    if val in ("y", "yes", "t", "true", "on", "1"):
+        return True
+    elif val in ("n", "no", "f", "false", "off", "0"):
+        return False
+    else:
+        raise ValueError(f"invalid truth value {val!r}")

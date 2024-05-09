@@ -9,15 +9,15 @@ import wandb
 from wandb import util
 from wandb._globals import _datatypes_callback
 from wandb.sdk.lib import filesystem
+from wandb.sdk.lib.paths import LogicalPath
 
 from .wb_value import WBValue
 
 if TYPE_CHECKING:  # pragma: no cover
-    import numpy as np  # type: ignore
+    import numpy as np
 
-    from wandb.apis.public import Artifact as PublicArtifact
+    from wandb.sdk.artifacts.artifact import Artifact
 
-    from ...wandb_artifacts import Artifact as LocalArtifact
     from ...wandb_run import Run as LocalRun
 
 
@@ -60,9 +60,7 @@ class Media(WBValue):
         self._extension = extension
         assert extension is None or path.endswith(
             extension
-        ), 'Media file extension "{}" must occur at the end of path "{}".'.format(
-            extension, path
-        )
+        ), f'Media file extension "{extension}" must occur at the end of path "{path}".'
 
         with open(self._path, "rb") as f:
             self._sha256 = hashlib.sha256(f.read()).hexdigest()
@@ -143,7 +141,7 @@ class Media(WBValue):
             self._path = new_path
             _datatypes_callback(media_path)
 
-    def to_json(self, run: Union["LocalRun", "LocalArtifact"]) -> dict:
+    def to_json(self, run: Union["LocalRun", "Artifact"]) -> dict:
         """Serialize the object into a JSON blob.
 
         Uses run or artifact to store additional data. If `run_or_artifact` is a
@@ -151,7 +149,7 @@ class Media(WBValue):
 
         Args:
             run_or_artifact (wandb.Run | wandb.Artifact): the Run or Artifact for which
-                this object should be generating JSON for - this is useful to to store
+                this object should be generating JSON for - this is useful to store
                 additional data if needed.
 
         Returns:
@@ -179,9 +177,7 @@ class Media(WBValue):
                 json_obj["_latest_artifact_path"] = artifact_entry_latest_url
 
             if artifact_entry_url is None or self.is_bound():
-                assert (
-                    self.is_bound()
-                ), "Value of type {} must be bound to a run with bind_to_run() before being serialized to JSON.".format(
+                assert self.is_bound(), "Value of type {} must be bound to a run with bind_to_run() before being serialized to JSON.".format(
                     type(self).__name__
                 )
 
@@ -193,11 +189,11 @@ class Media(WBValue):
                 # by definition is_bound, but are needed for
                 # mypy to understand that these are strings below.
                 assert isinstance(self._path, str)
-                json_obj["path"] = util.to_forward_slash_path(
+                json_obj["path"] = LogicalPath(
                     os.path.relpath(self._path, self._run.dir)
                 )
 
-        elif isinstance(run, wandb.wandb_sdk.wandb_artifacts.Artifact):
+        elif isinstance(run, wandb.Artifact):
             if self.file_is_set():
                 # The following two assertions are guaranteed to pass
                 # by definition of the call above, but are needed for
@@ -223,8 +219,7 @@ class Media(WBValue):
 
                     # if not, check to see if there is a source artifact for this object
                     if (
-                        self._artifact_source
-                        is not None
+                        self._artifact_source is not None
                         # and self._artifact_source.artifact != artifact
                     ):
                         default_root = self._artifact_source.artifact._default_root()
@@ -234,7 +229,7 @@ class Media(WBValue):
                             name = name.lstrip(os.sep)
 
                         # Add this image as a reference
-                        path = self._artifact_source.artifact.get_path(name)
+                        path = self._artifact_source.artifact.get_entry(name)
                         artifact.add_reference(path.ref_url(), name=name)
                     elif (
                         isinstance(self, Audio) or isinstance(self, Image)
@@ -253,10 +248,10 @@ class Media(WBValue):
 
     @classmethod
     def from_json(
-        cls: Type["Media"], json_obj: dict, source_artifact: "PublicArtifact"
+        cls: Type["Media"], json_obj: dict, source_artifact: "Artifact"
     ) -> "Media":
         """Likely will need to override for any more complicated media objects."""
-        return cls(source_artifact.get_path(json_obj["path"]).download())
+        return cls(source_artifact.get_entry(json_obj["path"]).download())
 
     def __eq__(self, other: object) -> bool:
         """Likely will need to override for any more complicated media objects."""
@@ -294,7 +289,7 @@ class BatchableMedia(Media):
 
 
 def _numpy_arrays_to_lists(
-    payload: Union[dict, Sequence, "np.ndarray"]
+    payload: Union[dict, Sequence, "np.ndarray"],
 ) -> Union[Sequence, dict, str, int, float, bool]:
     # Casts all numpy arrays to lists so we don't convert them to histograms, primarily for Plotly
 
@@ -315,4 +310,4 @@ def _numpy_arrays_to_lists(
     # Protects against logging non serializable objects
     elif isinstance(payload, Media):
         return str(payload.__class__.__name__)
-    return payload
+    return payload  # type: ignore

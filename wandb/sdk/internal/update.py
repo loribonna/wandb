@@ -8,7 +8,7 @@ import wandb
 def _find_available(
     current_version: str,
 ) -> Optional[Tuple[str, bool, bool, bool, Optional[str]]]:
-    from pkg_resources import parse_version
+    from wandb.util import parse_version
 
     pypi_url = f"https://pypi.org/pypi/{wandb._wandb_module}/json"
 
@@ -82,9 +82,8 @@ def check_available(current_version: str) -> Optional[Dict[str, Optional[str]]]:
 
     latest_version, pip_prerelease, deleted, yanked, yanked_reason = package_info
     upgrade_message = (
-        "%s version %s is available!  To upgrade, please run:\n"
-        " $ pip install %s --upgrade%s"
-        % (
+        "{} version {} is available!  To upgrade, please run:\n"
+        " $ pip install {} --upgrade{}".format(
             wandb_module_name,
             latest_version,
             wandb_module_name,

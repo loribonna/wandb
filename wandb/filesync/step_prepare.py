@@ -1,13 +1,12 @@
 """Batching file prepare requests to our API."""
 
-import asyncio
-import functools
 import queue
 import threading
 import time
 from typing import (
     TYPE_CHECKING,
     Callable,
+    Dict,
     List,
     Mapping,
     NamedTuple,
@@ -28,10 +27,7 @@ if TYPE_CHECKING:
 # Request for a file to be prepared.
 class RequestPrepare(NamedTuple):
     file_spec: "CreateArtifactFileSpecInput"
-    response_channel: Union[
-        "queue.Queue[ResponsePrepare]",
-        Tuple["asyncio.AbstractEventLoop", "asyncio.Future[ResponsePrepare]"],
-    ]
+    response_channel: "queue.Queue[ResponsePrepare]"
 
 
 class RequestFinish(NamedTuple):
@@ -39,9 +35,12 @@ class RequestFinish(NamedTuple):
 
 
 class ResponsePrepare(NamedTuple):
+    birth_artifact_id: str
     upload_url: Optional[str]
     upload_headers: Sequence[str]
-    birth_artifact_id: str
+    upload_id: Optional[str]
+    storage_path: Optional[str]
+    multipart_upload_urls: Optional[Dict[int, str]]
 
 
 Request = Union[RequestPrepare, RequestFinish]
@@ -58,7 +57,6 @@ def gather_batch(
     max_batch_size: int,
     clock: Callable[[], float] = time.monotonic,
 ) -> Tuple[bool, Sequence[RequestPrepare]]:
-
     batch_start_time = clock()
     remaining_time = batch_time
 
@@ -89,10 +87,25 @@ def gather_batch(
     return False, batch
 
 
+def prepare_response(response: "CreateArtifactFilesResponseFile") -> ResponsePrepare:
+    multipart_resp = response.get("uploadMultipartUrls")
+    part_list = multipart_resp["uploadUrlParts"] if multipart_resp else []
+    multipart_parts = {u["partNumber"]: u["uploadUrl"] for u in part_list} or None
+
+    return ResponsePrepare(
+        birth_artifact_id=response["artifact"]["id"],
+        upload_url=response["uploadUrl"],
+        upload_headers=response["uploadHeaders"],
+        upload_id=multipart_resp and multipart_resp.get("uploadID"),
+        storage_path=response.get("storagePath"),
+        multipart_upload_urls=multipart_parts,
+    )
+
+
 class StepPrepare:
     """A thread that batches requests to our file prepare API.
 
-    Any number of threads may call prepare_async() in parallel. The PrepareBatcher thread
+    Any number of threads may call prepare() in parallel. The PrepareBatcher thread
     will batch requests up and send them all to the backend at once.
     """
 
@@ -108,7 +121,7 @@ class StepPrepare:
         self._inter_event_time = inter_event_time
         self._batch_time = batch_time
         self._max_batch_size = max_batch_size
-        self._request_queue: "queue.Queue[Request]" = request_queue or queue.Queue()
+        self._request_queue: queue.Queue[Request] = request_queue or queue.Queue()
         self._thread = threading.Thread(target=self._thread_body)
         self._thread.daemon = True
 
@@ -121,23 +134,13 @@ class StepPrepare:
                 max_batch_size=self._max_batch_size,
             )
             if batch:
-                prepare_response = self._prepare_batch(batch)
+                batch_response = self._prepare_batch(batch)
                 # send responses
                 for prepare_request in batch:
                     name = prepare_request.file_spec["name"]
-                    response_file = prepare_response[name]
-                    upload_url = response_file["uploadUrl"]
-                    upload_headers = response_file["uploadHeaders"]
-                    birth_artifact_id = response_file["artifact"]["id"]
-
-                    response = ResponsePrepare(
-                        upload_url, upload_headers, birth_artifact_id
-                    )
-                    if isinstance(prepare_request.response_channel, queue.Queue):
-                        prepare_request.response_channel.put(response)
-                    else:
-                        loop, future = prepare_request.response_channel
-                        loop.call_soon_threadsafe(future.set_result, response)
+                    response_file = batch_response[name]
+                    response = prepare_response(response_file)
+                    prepare_request.response_channel.put(response)
             if finish:
                 break
 
@@ -155,21 +158,10 @@ class StepPrepare:
         """
         return self._api.create_artifact_files([req.file_spec for req in batch])
 
-    def prepare_async(
-        self, file_spec: "CreateArtifactFileSpecInput"
-    ) -> "asyncio.Future[ResponsePrepare]":
-        """Request the backend to prepare a file for upload."""
-        response: "asyncio.Future[ResponsePrepare]" = asyncio.Future()
-        self._request_queue.put(
-            RequestPrepare(file_spec, (asyncio.get_event_loop(), response))
-        )
-        return response
-
-    @functools.wraps(prepare_async)
-    def prepare_sync(
+    def prepare(
         self, file_spec: "CreateArtifactFileSpecInput"
     ) -> "queue.Queue[ResponsePrepare]":
-        response_queue: "queue.Queue[ResponsePrepare]" = queue.Queue()
+        response_queue: queue.Queue[ResponsePrepare] = queue.Queue()
         self._request_queue.put(RequestPrepare(file_spec, response_queue))
         return response_queue
 

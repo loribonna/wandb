@@ -1,6 +1,13 @@
 id: 0.torch.01-sparse-tensors
 plugin:
   - wandb
+depend:
+  requirements:
+    - --timeout 600 --extra-index-url https://download.pytorch.org/whl/cpu torch
+tag:
+  shard: torch
+  skips:
+    - platform: win
 assert:
   - :wandb:runs_len: 1
   - :wandb:runs[0][config]: {}
