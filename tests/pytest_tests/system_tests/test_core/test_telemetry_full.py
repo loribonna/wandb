@@ -25,7 +25,6 @@ def test_telemetry_finish(relay_server, wandb_init):
 
 
 def test_telemetry_imports(relay_server, wandb_init):
-
     with relay_server() as relay:
         transformers_mock = mock.MagicMock()
         transformers_mock.__name__ = "transformers"
@@ -89,12 +88,3 @@ def test_telemetry_run_organizing_set(relay_server, wandb_init):
         assert "set_run_name" in get_features(telemetry)
         assert "set_run_tags" in get_features(telemetry)
         assert "set_config_item" in get_features(telemetry)
-
-
-def test_telemetry_logs_settings_flags(relay_server, wandb_init):
-    with relay_server() as relay:
-        run = wandb_init(settings={"_async_upload_concurrency_limit": 123})
-        run.finish()
-
-    telemetry = relay.context.get_run_telemetry(run.id)
-    assert "async_uploads" in get_features(telemetry)

@@ -1,7 +1,7 @@
 #
 """Setup wandb session.
 
-This module configures a wandb session which can extend to mutiple wandb runs.
+This module configures a wandb session which can extend to multiple wandb runs.
 
 Functions:
     setup(): Configure wandb session.
@@ -98,7 +98,7 @@ class _WandbSetup__WandbSetup:  # noqa: N801
         self._pid = pid
 
         # keep track of multiple runs, so we can unwind with join()s
-        self._global_run_stack: List["wandb_run.Run"] = []
+        self._global_run_stack: List[wandb_run.Run] = []
 
         # TODO(jhr): defer strict checks until settings are fully initialized
         #            and logging is ready

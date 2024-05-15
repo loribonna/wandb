@@ -4,7 +4,6 @@ import queue
 import sys
 import tempfile
 import threading
-import time
 from unittest import mock
 
 import pytest
@@ -72,10 +71,7 @@ def mock_tty(monkeypatch):
 
 def test_login_timeout(mock_tty):
     mock_tty("junk\nmore\n")
-    start_time = time.time()
     ret = wandb.login(timeout=4)
-    elapsed = time.time() - start_time
-    assert 2 < elapsed < 15
     assert ret is False
     assert wandb.api.api_key is None
     assert wandb.setup().settings.mode == "disabled"
@@ -87,10 +83,7 @@ def test_login_timeout(mock_tty):
 )
 def test_login_timeout_choose(mock_tty):
     mock_tty("3\n")
-    start_time = time.time()
     ret = wandb.login(timeout=8)
-    elapsed = time.time() - start_time
-    assert elapsed < 15
     assert ret is False
     assert wandb.api.api_key is None
     assert wandb.setup().settings.mode == "offline"
@@ -99,10 +92,7 @@ def test_login_timeout_choose(mock_tty):
 def test_login_timeout_env_blank(mock_tty):
     mock_tty("\n\n\n")
     with mock.patch.dict(os.environ, {"WANDB_LOGIN_TIMEOUT": "4"}):
-        start_time = time.time()
         ret = wandb.login()
-        elapsed = time.time() - start_time
-        assert elapsed < 15
         assert ret is False
         assert wandb.api.api_key is None
         assert wandb.setup().settings.mode == "disabled"
@@ -111,7 +101,7 @@ def test_login_timeout_env_blank(mock_tty):
 def test_login_timeout_env_invalid(mock_tty):
     mock_tty("")
     with mock.patch.dict(os.environ, {"WANDB_LOGIN_TIMEOUT": "junk"}):
-        with pytest.raises(ValueError):
+        with pytest.raises(wandb.sdk.wandb_settings.SettingsPreprocessingError):
             wandb.login()
 
 
@@ -159,9 +149,8 @@ def test_login_sets_api_base_url(local_settings):
         assert api.settings["base_url"] == base_url
 
 
-@pytest.mark.skip(reason="We dont validate keys in `wandb.login()` right now")
 def test_login_invalid_key():
-    with mock.patch.dict("os.environ", WANDB_API_KEY="B" * 40):
+    with mock.patch.dict("os.environ", WANDB_API_KEY="X" * 40):
         wandb.ensure_configured()
-        with pytest.raises(wandb.UsageError):
-            wandb.login()
+        with pytest.raises(wandb.errors.AuthenticationError):
+            wandb.login(verify=True)

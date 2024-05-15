@@ -1403,14 +1403,12 @@ def test_object3d_label_is_optional(mock_run):
     }
     box_no_label = {"corners": [], "color": [0, 0, 0]}
     wandb.Object3D.from_point_cloud(points=[], boxes=[box_no_label, box_with_label])
-    assert True
 
 
 def test_object3d_score_is_optional(mock_run):
     box_with_score = {"corners": [], "score": 95, "color": [0, 0, 0]}
     box_no_score = {"corners": [], "color": [0, 0, 0]}
     wandb.Object3D.from_point_cloud(points=[], boxes=[box_no_score, box_with_score])
-    assert True
 
 
 ################################################################################
@@ -1460,9 +1458,8 @@ def test_partitioned_table():
 ################################################################################
 
 
-@pytest.mark.parametrize(
-    "media",
-    [
+def test_media_keys_escaped_as_glob_for_publish(mock_run):
+    media_to_test = [
         wandb.Image(
             np.zeros((28, 28)),
             masks={
@@ -1501,22 +1498,24 @@ def test_partitioned_table():
             np.random.uniform(-1, 1, 44100),
             sample_rate=44100,
         ),
-    ],
-)
-def test_media_keys_escaped_as_glob_for_publish(mock_run, media):
-    run = mock_run(use_magic_mock=True)
-    weird_key = "[weirdkey]"
-    media.bind_to_run(run, weird_key, 0)
-    published_globs = [
-        g
-        for (
-            [files_dict],
-            [],
-        ) in run._backend.interface.publish_files.call_args_list
-        for g, _ in files_dict["files"]
     ]
-    assert not any(weird_key in g for g in published_globs), published_globs
-    assert any(glob.escape(weird_key) in g for g in published_globs), published_globs
+
+    for media in media_to_test:
+        run = mock_run(use_magic_mock=True)
+        weird_key = "[weirdkey]"
+        media.bind_to_run(run, weird_key, 0)
+        published_globs = [
+            g
+            for (
+                [files_dict],
+                [],
+            ) in run._backend.interface.publish_files.call_args_list
+            for g, _ in files_dict["files"]
+        ]
+        assert not any(weird_key in g for g in published_globs), published_globs
+        assert any(
+            glob.escape(weird_key) in g for g in published_globs
+        ), published_globs
 
 
 def test_numpy_arrays_to_list():
@@ -1525,3 +1524,24 @@ def test_numpy_arrays_to_list():
     assert conv(np.array((1, 2))) == [1, 2]
     assert conv([np.array((1, 2))]) == [[1, 2]]
     assert conv(np.array(({"a": [np.array((1, 2))]}, 3))) == [{"a": [[1, 2]]}, 3]
+
+
+def test_log_uint8_image():
+    pytest.importorskip("torchvision")
+    from torchvision.io import read_image
+
+    with open("temp.png", "wb") as temp:
+        # Create and save image
+        imarray = np.random.rand(100, 100, 3) * 255
+        im = Image.fromarray(imarray.astype("uint8")).convert("RGBA")
+        im.save(temp.name)
+
+        # Reading with torch vision
+        image = read_image(temp.name)
+
+        torch_vision = wandb.Image(image)
+        path_im = wandb.Image(temp.name)
+
+        path_im, torch_vision = np.array(path_im.image), np.array(torch_vision.image)
+
+        assert np.array_equal(path_im, torch_vision)

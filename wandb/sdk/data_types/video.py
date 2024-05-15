@@ -13,9 +13,10 @@ from .base_types.media import BatchableMedia
 if TYPE_CHECKING:  # pragma: no cover
     from typing import TextIO
 
-    import numpy as np  # type: ignore
+    import numpy as np
 
-    from ..wandb_artifacts import Artifact as LocalArtifact
+    from wandb.sdk.artifacts.artifact import Artifact
+
     from ..wandb_run import Run as LocalRun
 
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # https://github.com/wandb/wandb/issues/3472
 #
 # Essentially, the issue is that moviepy's write_gif function fails to close
-# the open write / file descripter returned from `imageio.save`. The following
+# the open write / file descriptor returned from `imageio.save`. The following
 # function is a simplified copy of the function in the moviepy source code.
 # See https://github.com/Zulko/moviepy/blob/7e3e8bb1b739eb6d1c0784b0cb2594b587b93b39/moviepy/video/io/gif_writers.py#L428
 #
@@ -36,9 +37,7 @@ def write_gif_with_image_io(
         required='wandb.Video requires imageio when passing raw data. Install with "pip install imageio"',
     )
 
-    writer = imageio.save(
-        filename, duration=1.0 / clip.fps, quantizer=0, palettesize=256, loop=0
-    )
+    writer = imageio.save(filename, fps=clip.fps, quantizer=0, palettesize=256, loop=0)
 
     for frame in clip.iter_frames(fps=fps, dtype="uint8"):
         writer.append_data(frame)
@@ -132,7 +131,7 @@ class Video(BatchableMedia):
             required='wandb.Video requires moviepy and imageio when passing raw data.  Install with "pip install moviepy imageio"',
         )
         tensor = self._prepare_video(self.data)
-        _, self._height, self._width, self._channels = tensor.shape
+        _, self._height, self._width, self._channels = tensor.shape  # type: ignore
 
         # encode sequence of images into gif string
         clip = mpy.ImageSequenceClip(list(tensor), fps=self._fps)
@@ -169,7 +168,7 @@ class Video(BatchableMedia):
     def get_media_subdir(cls: Type["Video"]) -> str:
         return os.path.join("media", "videos")
 
-    def to_json(self, run_or_artifact: Union["LocalRun", "LocalArtifact"]) -> dict:
+    def to_json(self, run_or_artifact: Union["LocalRun", "Artifact"]) -> dict:
         json_dict = super().to_json(run_or_artifact)
         json_dict["_type"] = self._log_type
 

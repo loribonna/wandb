@@ -7,6 +7,7 @@ Todo:
     - deprecate ones that were public but we want to remove
 
 """
+
 import inspect
 
 import wandb
@@ -27,11 +28,15 @@ SYMBOLS_ROOT_DATATYPES = {
 }
 
 SYMBOLS_ROOT_SDK = {
+    "ArtifactTTL",
     "login",
     "init",
     "log",
     "log_artifact",
     "use_artifact",
+    "log_model",
+    "use_model",
+    "link_model",
     "define_metric",
     "summary",
     "config",
@@ -72,7 +77,6 @@ SYMBOLS_ROOT_OTHER = {
     "data_types",
     "division",
     "docker",
-    "sdk_py27",
     "wandb.docker",  # what is this?
     "dummy",
     "ensure_configured",
@@ -98,6 +102,7 @@ SYMBOLS_ROOT_OTHER = {
     "save",
     "sdk",
     "set_trace",
+    "os",
     "setup",
     "sklearn",
     "sync",
@@ -179,6 +184,9 @@ SYMBOLS_RUN = {
     "log",
     "log_artifact",
     "link_artifact",
+    "log_model",
+    "use_model",
+    "link_model",
     "upsert_artifact",
     "finish_artifact",
     "use_artifact",
@@ -252,6 +260,7 @@ SYMBOLS_CONFIG_OTHER = {
     "as_dict",
     "update_locked",
     "persist",
+    "merge_locked",
 }
 
 
@@ -291,6 +300,7 @@ SYMBOLS_WANDB_INIT = {
     "notes",
     "job_type",
     "reinit",
+    "fork_from",
 }
 
 

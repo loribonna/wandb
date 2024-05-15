@@ -1,37 +1,33 @@
 import copy
-import inspect
 import json
 import os
 import subprocess
 import sys
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple, Union
 from unittest import mock
 
 import pytest
 import wandb
 from click.testing import CliRunner
 from wandb.errors import UsageError
-from wandb.sdk import wandb_login, wandb_settings
+from wandb.sdk import wandb_settings
 from wandb.sdk.lib._settings_toposort_generate import _get_modification_order
 
 if sys.version_info >= (3, 8):
     from typing import get_type_hints
-elif sys.version_info >= (3, 7):
-    from typing_extensions import get_type_hints
 else:
-
-    def get_type_hints(obj):
-        return obj.__annotations__
+    from typing_extensions import get_type_hints
 
 
 Property = wandb_settings.Property
 Settings = wandb_settings.Settings
 Source = wandb_settings.Source
+is_instance_recursive = wandb_settings.is_instance_recursive
 
 
 def test_multiproc_strict_bad(test_settings):
-    with pytest.raises(ValueError):
+    with pytest.raises(wandb_settings.SettingsPreprocessingError):
         test_settings(dict(strict="bad"))
 
 
@@ -121,21 +117,10 @@ def test_property_multiple_validators():
 
 
 # fixme: remove this once full validation is restored
-def test_property_strict_validation(capsys):
-    attributes = inspect.getmembers(Property, lambda a: not (inspect.isroutine(a)))
-    strict_validate_settings = [
-        a for a in attributes if a[0] == "_Property__strict_validate_settings"
-    ][0][1]
-    for name in strict_validate_settings:
-        p = Property(name=name, validator=lambda x: isinstance(x, int))
-        with pytest.raises(ValueError):
-            p.update(value="rubbish")
-
+def test_property_strict_validation():
     p = Property(name="api_key", validator=lambda x: isinstance(x, str))
-    p.update(value=31415926)
-    captured = capsys.readouterr().err
-    msg = "Invalid value for property api_key: 31415926"
-    assert msg in captured
+    with pytest.raises(wandb_settings.SettingsValidationError):
+        p.update(value=31415926)
 
 
 def test_settings_validator_method_names():
@@ -296,35 +281,20 @@ def test_default_props_match_class_attributes():
     assert set(default_props) - set(class_attributes) == set()
 
 
-# fixme: remove this once full validation is restored
-def test_settings_strict_validation(capsys):
-    s = Settings(api_key=271828, lol=True)
-    assert s.api_key == 271828
-    with pytest.raises(AttributeError):
-        s.lol  # noqa: B018
-    captured = capsys.readouterr().err
-    msgs = (
-        "Ignoring unexpected arguments: ['lol']",
-        "Invalid value for property api_key: 271828",
-    )
-    for msg in msgs:
-        assert msg in captured
+def test_settings_strict_validation():
+    with pytest.raises(wandb_settings.SettingsUnexpectedArgsError):
+        Settings(api_key=271828, lol=True)
+
+
+def test_settings_strict_validation_2():
+    with pytest.raises(wandb_settings.SettingsValidationError):
+        Settings(api_key=271828)
 
 
 def test_static_settings_json_dump():
     s = Settings()
-    static_settings = s.make_static()
+    static_settings = s.to_dict()
     assert json.dumps(static_settings)
-
-
-# fixme: remove this once full validation is restored
-def test_no_repeat_warnings(capsys):
-    s = Settings(api_key=234)
-    assert s.api_key == 234
-    s.update(api_key=234)
-    captured = capsys.readouterr().err
-    msg = "Invalid value for property api_key: 234"
-    assert captured.count(msg) == 1
 
 
 def test_program_python_m():
@@ -812,12 +782,10 @@ def test_strict():
     assert not settings.strict
 
 
-def test_validate_console_problem_anonymous():
+def test_validate_console_anonymous():
     s = Settings()
     with pytest.raises(UsageError):
         s.update(console="lol")
-    with pytest.raises(UsageError):
-        s.update(problem="lol")
     with pytest.raises(UsageError):
         s.update(anonymous="lol")
 
@@ -870,53 +838,6 @@ def test_log_internal(test_settings):
     assert fname == "debug-internal.log"
 
 
-class TestAsyncUploadConcurrency:
-    def test_default_is_none(self, test_settings):
-        settings = test_settings()
-        assert settings._async_upload_concurrency_limit is None
-
-    @pytest.mark.parametrize(
-        ["value", "ok"],
-        [
-            (None, True),
-            (1, True),
-            (2, True),
-            (10, True),
-            (100, True),
-            (99999999, True),
-            (-10, False),
-            ("not an int", False),
-        ],
-    )
-    def test_err_iff_bad_value(self, value: Optional[int], ok: bool, test_settings):
-        if ok:
-            settings = test_settings({"_async_upload_concurrency_limit": value})
-            assert settings._async_upload_concurrency_limit == value
-        else:
-            with pytest.raises((UsageError, ValueError)):
-                test_settings({"_async_upload_concurrency_limit": value})
-
-    @pytest.mark.parametrize(
-        ["value", "warn"], [(None, False), (1, False), (9999999, True)]
-    )
-    @mock.patch("wandb.termwarn")
-    def test_warns_if_exceeds_filelimit(
-        self,
-        termwarn: mock.Mock,
-        test_settings,
-        value: Optional[int],
-        warn: bool,
-    ):
-        pytest.importorskip("resource")
-        test_settings({"_async_upload_concurrency_limit": value})
-
-        if warn:
-            termwarn.assert_called_once()
-            assert "exceeds this process's limit" in termwarn.call_args[0][0]
-        else:
-            termwarn.assert_not_called()
-
-
 # --------------------------
 # test static settings
 # --------------------------
@@ -925,9 +846,9 @@ class TestAsyncUploadConcurrency:
 def test_settings_static():
     from wandb.sdk.internal.settings_static import SettingsStatic
 
-    static_settings = SettingsStatic(Settings().make_static())
+    static_settings = SettingsStatic(Settings().to_proto())
     assert "base_url" in static_settings
-    assert static_settings.get("base_url") == "https://api.wandb.ai"
+    assert static_settings.base_url == "https://api.wandb.ai"
 
 
 # --------------------------
@@ -1012,17 +933,16 @@ def test_wandb_dir_run(mock_run):
 
 def test_console_run(mock_run):
     run = mock_run(settings={"console": "auto", "mode": "offline"})
-    assert run._settings.console == "auto"
-    assert run._settings._console == wandb_settings.SettingsConsole.WRAP
+    assert run._settings.console == "wrap"
 
 
 def test_console(test_settings):
     test_settings = test_settings()
-    assert test_settings._console == wandb_settings.SettingsConsole.OFF
+    assert test_settings.console == "off"
     test_settings.update({"console": "redirect"}, source=Source.BASE)
-    assert test_settings._console == wandb_settings.SettingsConsole.REDIRECT
+    assert test_settings.console == "redirect"
     test_settings.update({"console": "wrap"}, source=Source.BASE)
-    assert test_settings._console == wandb_settings.SettingsConsole.WRAP
+    assert test_settings.console == "wrap"
 
 
 def test_code_saving_save_code_env_false(mock_run, test_settings):
@@ -1043,27 +963,31 @@ def test_code_saving_disable_code(mock_run, test_settings):
         assert run.settings.save_code is False
 
 
-def test_override_login_settings(test_settings):
-    wlogin = wandb_login._WandbLogin()
-    login_settings = test_settings().copy()
-    login_settings.update(show_emoji=True)
-    wlogin.setup({"_settings": login_settings})
-    assert wlogin._settings.show_emoji is True
-
-
-def test_override_login_settings_with_dict():
-    wlogin = wandb_login._WandbLogin()
-    login_settings = dict(show_emoji=True)
-    wlogin.setup({"_settings": login_settings})
-    assert wlogin._settings.show_emoji is True
-
-
 def test_setup_offline(test_settings):
     # this is to increase coverage
     login_settings = test_settings().copy()
     login_settings.update(mode="offline")
     assert wandb.setup(settings=login_settings)._instance._get_entity() is None
     assert wandb.setup(settings=login_settings)._instance._load_viewer() is None
+
+
+def test_disable_machine_info(test_settings):
+    settings = test_settings()
+    attrs = (
+        "_disable_stats",
+        "_disable_meta",
+        "disable_code",
+        "disable_git",
+        "disable_job_creation",
+    )
+    for attr in attrs:
+        assert not getattr(settings, attr)
+    settings.update({"_disable_machine_info": True}, source=Source.BASE)
+    for attr in attrs:
+        assert getattr(settings, attr) is True
+    settings.update({"_disable_machine_info": False}, source=Source.BASE)
+    for attr in attrs:
+        assert getattr(settings, attr) is False
 
 
 @pytest.mark.skip(reason="causes other tests that depend on capsys to fail")
@@ -1073,3 +997,103 @@ def test_silent_env_run(mock_run, test_settings):
         settings._apply_env_vars(os.environ)
         run = mock_run(settings=settings)
         assert run._settings.silent is True
+
+
+def test_is_instance_recursive():
+    # Test with simple types
+    assert is_instance_recursive(42, int)
+    assert not is_instance_recursive(42, str)
+    assert is_instance_recursive("hello", str)
+    assert not is_instance_recursive("hello", int)
+
+    # Test with Any type
+    assert is_instance_recursive(42, Any)
+    assert is_instance_recursive("hello", Any)
+    assert is_instance_recursive([1, 2, 3], Any)
+    assert is_instance_recursive({"a": 1, "b": 2}, Any)
+
+    # Test with Union
+    assert is_instance_recursive(42, Union[int, str])
+    assert is_instance_recursive("hello", Union[int, str])
+    assert not is_instance_recursive([1, 2, 3], Union[int, str])
+
+    # Test with Mapping
+    assert is_instance_recursive({"a": 1, "b": 2}, Dict[str, int])
+    assert not is_instance_recursive({"a": 1, "b": "2"}, Dict[str, int])
+    assert not is_instance_recursive([("a", 1), ("b", 2)], Dict[str, int])
+
+    # Test with Sequence
+    assert is_instance_recursive([1, 2, 3], List[int])
+    assert not is_instance_recursive([1, 2, "3"], List[int])
+    assert not is_instance_recursive("123", List[int])
+    assert is_instance_recursive([(1, 2), (3, 4)], List[Tuple[int, int]])
+    assert not is_instance_recursive([(1, 2), (3, "4")], List[Tuple[int, int]])
+
+    # Test with fixed-length Sequence
+    assert is_instance_recursive([1, "a", 3.5], Tuple[int, str, float])
+    assert not is_instance_recursive([1, "a", "3.5"], Tuple[int, str, float])
+    assert not is_instance_recursive([1, "a"], Tuple[int, str, float])
+
+    # Test with Tuple of variable length
+    assert is_instance_recursive((1, 2, 3), Tuple[int, ...])
+    assert not is_instance_recursive((1, 2, "a"), Tuple[int, ...])
+    assert is_instance_recursive((1, 2, "a"), Tuple[Union[int, str], ...])
+
+    # Test with Set
+    assert is_instance_recursive({1, 2, 3}, Set[int])
+    assert not is_instance_recursive({1, 2, "3"}, Set[int])
+    assert not is_instance_recursive([1, 2, 3], Set[int])
+
+    # Test with nested types
+    assert is_instance_recursive({"a": [1, 2], "b": [3, 4]}, Dict[str, List[int]])
+    assert not is_instance_recursive({"a": [1, 2], "b": [3, "4"]}, Dict[str, List[int]])
+
+
+def test_is_instance_recursive_mapping_and_sequence():
+    # Test with Mapping
+    assert is_instance_recursive({"a": 1, "b": 2}, Mapping[str, int])
+    assert not is_instance_recursive({"a": 1, "b": "2"}, Mapping[str, int])
+    assert not is_instance_recursive([("a", 1), ("b", 2)], Mapping[str, int])
+
+    # Test with Sequence
+    assert is_instance_recursive([1, 2, 3], Sequence[int])
+    assert not is_instance_recursive([1, 2, "3"], Sequence[int])
+    assert not is_instance_recursive("123", Sequence[int])
+    assert is_instance_recursive([(1, 2), (3, 4)], Sequence[Tuple[int, int]])
+    assert not is_instance_recursive([(1, 2), (3, "4")], Sequence[Tuple[int, int]])
+
+    # Test with nested types and Mapping
+    assert is_instance_recursive(
+        {"a": [1, 2], "b": [3, 4]}, Mapping[str, Sequence[int]]
+    )
+    assert not is_instance_recursive(
+        {"a": [1, 2], "b": [3, "4"]}, Mapping[str, Sequence[int]]
+    )
+
+    # Test with nested types and Sequence
+    assert is_instance_recursive(
+        [{"a": 1, "b": 2}, {"c": 3, "d": 4}], Sequence[Mapping[str, int]]
+    )
+    assert not is_instance_recursive(
+        [{"a": 1, "b": 2}, {"c": 3, "d": "4"}], Sequence[Mapping[str, int]]
+    )
+
+
+def test_is_instance_recursive_custom_types():
+    class Custom:
+        pass
+
+    class CustomSubclass(Custom):
+        pass
+
+    assert is_instance_recursive(Custom(), Custom)
+    assert is_instance_recursive(CustomSubclass(), Custom)
+    assert not is_instance_recursive(Custom(), CustomSubclass)
+    assert is_instance_recursive(CustomSubclass(), CustomSubclass)
+
+    # container types
+    assert is_instance_recursive([Custom()], List[Custom])
+    assert is_instance_recursive([CustomSubclass()], List[Custom])
+    assert is_instance_recursive(
+        {"a": Custom(), "b": CustomSubclass()}, Mapping[str, Custom]
+    )
