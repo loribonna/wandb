@@ -13,5 +13,5 @@ pip install -e .
 
 ### With wheels
 ```bash
-pip install https://github.com/loribonna/wandb/releases/download/0.0.1/wandb-0.0.1a1-py3-none-linux_x86_64.whl`
+pip install https://github.com/loribonna/wandb/releases/download/0.0.1/wandb-0.0.1a1-py3-none-linux_x86_64.whl
 ```
